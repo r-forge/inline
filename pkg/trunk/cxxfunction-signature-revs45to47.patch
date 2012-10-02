@@ -1,0 +1,322 @@
+Index: inline/R/getDynLib.R
+===================================================================
+--- inline/R/getDynLib.R	(revision 44)
++++ inline/R/getDynLib.R	(revision 48)
+@@ -1,16 +1,16 @@
+ setGeneric("getDynLib", function(x, ...) standardGeneric("getDynLib") )
+ 
+-setMethod( "getDynLib", signature( x = "character" ), 
++setMethod( "getDynLib", signature( x = "character" ),
+ function( x ){
+ 	dlls <- getLoadedDLLs()
+ 	if( x %in% names( dlls ) ){
+ 		dlls[[ x ]]
+ 	} else {
+-		stop( sprintf( "dll %s not loaded" ) )	
++		stop( sprintf( "dll %s not loaded", x ) )
+ 	}
+ } )
+ 
+-setMethod( "getDynLib", signature( x = "CFunc" ), 
++setMethod( "getDynLib", signature( x = "CFunc" ),
+ function( x ){
+ 	env <- environment( x@.Data )
+ 	f <- get( "f", env )
+Index: inline/R/cxxsignature.R
+===================================================================
+--- inline/R/cxxsignature.R	(revision 0)
++++ inline/R/cxxsignature.R	(revision 48)
+@@ -0,0 +1,18 @@
++setClass( "C++Signature", 
++    representation( signature = "character" )
++)
++
++cxxsignature <- function(...){
++    value <- list(...)
++    names <- names(value)
++    for (i in seq_along(value)) {
++        sigi <- el(value, i)
++        if (!is.character(sigi) || length(sigi) != 1L) 
++            stop(gettextf("bad class specified for element %d (should be a single character string)", 
++                i), domain = NA)
++    }
++    value <- as.character(value)
++    names(value) <- names
++    new( "C++Signature", signature = value )
++}
++
+Index: inline/R/cxxfunction.R
+===================================================================
+--- inline/R/cxxfunction.R	(revision 44)
++++ inline/R/cxxfunction.R	(revision 48)
+@@ -59,7 +59,8 @@
+ 	    stop("mismatch between the number of functions declared in 'sig' and the number of function bodies provided in 'body'")
+ 	    
+ 	signature <- lapply( sig, function(x) {
+-		if( ! length(x) ){ 
++		if( is(x, "C++Signature" ) ) x <- x@signature 
++	    if( ! length(x) ){ 
+ 			"" 
+ 		} else {
+ 			paste( sprintf( "SEXP %s", names(x) ), collapse = ", " )
+@@ -67,17 +68,61 @@
+ 	} )
+ 	
+ 	decl <- lapply( 1:length(sig) , function(index) {
+-		sprintf( 'SEXP %s( %s) ;', names(signature)[index] , signature[[index]] ) 
++		s <- sig[[index]]
++		name <- names(signature)[index]
++		if( is( s, "C++Signature" ) ){
++		    s <- s@signature
++		    s <- if( ! length(s) ) "" else paste( sprintf( "%s %s", s, names(s) ), collapse = ", " )
++		    sprintf( 'SEXP %s( %s) ;\ninline_::Magic %s____( %s ) ; ', 
++		        name, signature[[index]], 
++		        name, s ) 
++		} else{
++		    sprintf( 'SEXP %s( %s) ;', names(signature)[index] , signature[[index]] )
++		}
+ 	} )
+ 
+ 	def <- lapply( 1:length(sig), function(index){
+-		sprintf( '
++		s <- sig[[index]]
++		if( is( s, "C++Signature" ) ){
++		    s <- s@signature
++		    body_wrapper <- 
++		        paste( 
++		            "    return ", names(signature)[index], "____(", 
++		            if( length(signature[[index]]) ) {
++		                paste( sprintf( "::Rcpp::internal::converter(%s)", names(s) ), collapse = ", ")
++		            } else "" , 
++		            ") ;", sep = ""
++		    )
++		    s <- if( ! length(s) ) "" else paste( sprintf( "%s %s", s, names(s) ), collapse = ", " )
++		    
++		    sprintf( '
+ SEXP %s( %s ){
+ %s
+ }
+-', names(signature)[index], 
+-	signature[[index]], 
+-	if(is.null(settings$body)) body[[index]] else settings$body(body[[index]]) )
++inline_::Magic %s____( %s ){
++%s
++}
++',
++                names(signature)[index], 
++                signature[[index]], 
++                if(is.null(settings$body)) body_wrapper else settings$body(body_wrapper) ,
++                names(signature)[index], 
++                s,
++                body[[index]]
++            )
++		     
++		} else {
++		    sprintf( '
++SEXP %s( %s ){
++%s
++}
++',
++                names(signature)[index], 
++                signature[[index]], 
++                if(is.null(settings$body)) body[[index]] else settings$body(body[[index]]) 
++            )
++	    }
++	    
+ 	} )
+ 	
+ 	settings_includes <- if( is.null( settings$includes ) ) "" else paste( settings$includes, collapse = "\n" )
+@@ -85,6 +130,7 @@
+ 	code <- sprintf( '
+ // includes from the plugin
+ %s
++%s
+ 
+ // user includes
+ %s
+@@ -97,12 +143,27 @@
+ // definition
+ %s
+ 
+-', settings_includes , paste( includes, collapse = "\n" ), 
+-	paste( decl, collapse = "\n" ), 
+-	paste( def, collapse = "\n")
++',  settings_includes , 
++    if( any( sapply( sig, function(x) is(x, "C++Signature" ) ) ) ){
++    '
++	        namespace inline_ {
++	            class Magic {
++	                public:
++	                    template <typename T>
++	                    Magic( const T& object_ ) : object( ::Rcpp::wrap( object_) ){}
++	                    
++	                    operator SEXP(){ return object ; }
++	                private :
++	                    Rcpp::RObject object ;
++	            } ;
++	       }
++	'    
++    } else "", 
++    paste( includes, collapse = "\n" ), 
++    paste( decl, collapse = "\n" ), 
++    paste( def, collapse = "\n")
+ 	)
+ 
+-	
+ 	if( !is.null( env <- settings$env ) ){
+ 		do.call( Sys.setenv, env )
+ 		if( isTRUE(verbose) ){
+@@ -153,20 +214,23 @@
+   	DLL <- dyn.load( libLFile )
+   	
+   	for( i in seq_along(sig) ){
+-  		res[[i]] <- new( "CFunc", code = code )
++  	    res[[i]] <- new( "CFunc", code = code )
+   		
+   		fn <- function(arg) {
+   		  NULL
+   		}
+   		
++  		s <- sig[[i]]
++  		if( is(s, "C++Signature") ) s <- s@signature
++  		
+     	## Modify the function formals to give the right argument list
+-    	args <- formals(fn)[ rep(1, length(sig[[i]])) ]
+-    	names(args) <- names(sig[[i]])
++    	args <- formals(fn)[ rep(1, length(s)) ]
++    	names(args) <- names(s)
+     	formals(fn) <- args
+   		  
+     	## create .Call function call that will be added to 'fn'
+-  		body <- quote( .Call( EXTERNALNAME, ARG) )[ c(1:2, rep(3, length(sig[[i]]))) ]
+-  		for ( j in seq(along = sig[[i]]) ) body[[j+2]] <- as.name(names(sig[[i]])[j])
++  		body <- quote( .Call( EXTERNALNAME, ARG) )[ c(1:2, rep(3, length(s))) ]
++  		for ( j in seq(along = s) ) body[[j+2]] <- as.name(names(s)[j])
+   		
+   		body[[1L]] <- .Call
+   		body[[2L]] <- getNativeSymbolInfo( names(sig)[[i]], DLL )$address
+Index: inline/DESCRIPTION
+===================================================================
+--- inline/DESCRIPTION	(revision 44)
++++ inline/DESCRIPTION	(revision 48)
+@@ -1,6 +1,6 @@
+ Package: inline
+-Version: 0.3.8
+-Date: 2010-12-07
++Version: 0.3.8.1
++Date: 2010-12-14
+ Title: Inline C, C++, Fortran function calls from R
+ Author: Oleg Sklyar, Duncan Murdoch, Mike Smith, Dirk Eddelbuettel, Romain Francois
+ Maintainer: Oleg Sklyar <oleg.sklyar@googlemail.com>
+@@ -11,4 +11,4 @@
+ URL: http://www.ebi.ac.uk/~osklyar/inline/
+ Copyright: Oleg Sklyar, 2005-2010
+ LazyLoad: yes
+-Packaged: 2009-12-27 20:12:53 UTC; osklyar
++
+Index: inline/man/cxxsignature.Rd
+===================================================================
+--- inline/man/cxxsignature.Rd	(revision 0)
++++ inline/man/cxxsignature.Rd	(revision 48)
+@@ -0,0 +1,44 @@
++\name{cxxsignature}
++\alias{cxxsignature}
++\title{
++C++ function signature
++}
++\description{
++C++ function signature
++}
++\usage{
++cxxsignature(...)
++}
++\arguments{
++  \item{\dots}{
++      Named arguments to form a signature. The names must be
++      valid C++ symbols, and the elements must be types that 
++      Rcpp::as can handle : int, double, std::string, IntegerVector, etc ...
++  }
++}
++\value{
++    An object of class C++Signature, used internally by \code{\link{cxxfunction}}
++}
++\note{This only works when Rcpp is being included, e.g. with the use of 
++the Rcpp plugin.}
++\seealso{\code{\link{cxxfunction}}}
++\examples{
++\dontrun{
++
++# Rcpp plugin
++if( require( Rcpp ) ){
++
++	fx <- cxxfunction( 
++	    cxxsignature(x = "int", y = "double" ) , 
++	    '
++	    	return wrap( x * y ) ;
++	    ', 
++	    plugin = "Rcpp" )
++	fx( 2L, 5 )
++
++}
++
++    
++}
++}
++\keyword{interface}
+Index: inline/man/inline-package.Rd
+===================================================================
+--- inline/man/inline-package.Rd	(revision 44)
++++ inline/man/inline-package.Rd	(revision 48)
+@@ -14,7 +14,7 @@
+ \tabular{ll}{
+ Package: \tab inline\cr
+ Type: \tab Package\cr
+-Version: \tab 0.3.8\cr
++Version: \tab 0.3.9\cr
+ Date: \tab 2010-12-07\cr
+ License: \tab LGPL\cr
+ LazyLoad: \tab yes\cr
+Index: inline/man/cxxfunction.Rd
+===================================================================
+--- inline/man/cxxfunction.Rd	(revision 44)
++++ inline/man/cxxfunction.Rd	(revision 48)
+@@ -43,7 +43,6 @@
+ 		return wrap( as<int>(x) * as<double>(y) ) ;
+ 	', plugin = "Rcpp" )
+ 	fx( 2L, 5 )
+-
+ }
+ 
+ # RcppArmadillo plugin
+Index: inline/NAMESPACE
+===================================================================
+--- inline/NAMESPACE	(revision 44)
++++ inline/NAMESPACE	(revision 48)
+@@ -2,10 +2,11 @@
+ importFrom( "utils", "package.skeleton" )
+ 
+ export(
+-  "cfunction", "cxxfunction", "getPlugin", "registerPlugin"
++  "cfunction", "cxxfunction", "getPlugin", "registerPlugin", "cxxsignature"
+ )
+ 
+ exportMethods(
+   "setCMethod", "getDynLib", "package.skeleton"
+ )
+ 
++
+Index: inline/NEWS
+===================================================================
+--- inline/NEWS	(revision 44)
++++ inline/NEWS	(revision 48)
+@@ -1,3 +1,10 @@
++0.3.9   (future)
++
++    o   new R function "cxxsignature" that can be used to specify C++ signature
++        in calls to cxxfunction
++
++    o   getDynLib() error message corrected as suggested by Yasir Suhail
++
+ 0.3.8   2010-12-07
+ 
+     o   faster cfunction and cxxfunction by loading and resolving the routine
