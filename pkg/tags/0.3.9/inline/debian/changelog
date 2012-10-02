@@ -1,0 +1,33 @@
+r-cran-inline (0.3.8-1) unstable; urgency=low
+
+  * New upstream version 
+  
+  * debian/control: Set (Build-)Depends: to current R version
+
+ -- Dirk Eddelbuettel <edd@debian.org>  Tue, 07 Dec 2010 22:04:22 -0600
+
+r-cran-inline (0.3.7-1) unstable; urgency=low
+
+  * New upstream version 
+
+ -- Dirk Eddelbuettel <edd@debian.org>  Tue, 02 Nov 2010 19:56:03 -0500
+
+r-cran-inline (0.3.6-1) unstable; urgency=low
+
+  * New upstream version 
+
+ -- Dirk Eddelbuettel <edd@debian.org>  Fri, 30 Jul 2010 06:52:25 -0500
+
+r-cran-inline (0.3.5-1) unstable; urgency=low
+
+  * New upstream version released this morning
+  
+  * debian/control: Set Standards-Version: to current version 
+
+ -- Dirk Eddelbuettel <edd@debian.org>  Wed, 02 Jun 2010 17:27:40 -0500
+
+r-cran-inline (0.3.4-1) unstable; urgency=low
+
+  * Initial Debian package				(Closes: #580667)
+
+ -- Dirk Eddelbuettel <edd@debian.org>  Fri, 07 May 2010 10:16:33 -0500
