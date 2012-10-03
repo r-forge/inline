@@ -1,0 +1,11 @@
+import("methods")
+importFrom( "utils", "package.skeleton" )
+
+export(
+  "cfunction", "cxxfunction", "getPlugin", "registerPlugin", "rcpp"
+)
+
+exportMethods(
+  "setCMethod", "getDynLib", "package.skeleton"
+)
+
